@@ -9,6 +9,8 @@
 (define-constant ERR_ALREADY_EXECUTED (err u107))
 (define-constant ERR_NOT_MEMBER (err u108))
 
+(define-constant ERR_INVALID_SCORE (err u201))
+
 (define-data-var next-proposal-id uint u1)
 (define-data-var total-members uint u0)
 (define-data-var treasury-balance uint u0)
@@ -313,4 +315,186 @@
     treasury-balance: (var-get treasury-balance),
     next-proposal-id: (var-get next-proposal-id)
   }
+)
+
+
+(define-map member-reputation
+  principal
+  {
+    total-score: uint,
+    proposals-created: uint,
+    proposals-passed: uint,
+    votes-cast: uint,
+    participation-rate: uint,
+    trust-level: (string-ascii 20)
+  }
+)
+
+(define-map reputation-history
+  { member: principal, action-id: uint }
+  {
+    action-type: (string-ascii 30),
+    score-change: int,
+    timestamp: uint
+  }
+)
+
+(define-data-var next-action-id uint u1)
+
+(define-private (calculate-trust-level (score uint))
+  (if (>= score u1000)
+    "legendary"
+    (if (>= score u500)
+      "veteran"
+      (if (>= score u200)
+        "trusted"
+        (if (>= score u50)
+          "active"
+          "newcomer"
+        )
+      )
+    )
+  )
+)
+
+(define-private (update-participation-rate (member principal))
+  (let
+    (
+      (rep-data (default-to
+        { total-score: u0, proposals-created: u0, proposals-passed: u0, 
+          votes-cast: u0, participation-rate: u0, trust-level: "newcomer" }
+        (map-get? member-reputation member)
+      ))
+      (proposals-created (get proposals-created rep-data))
+      (proposals-passed (get proposals-passed rep-data))
+    )
+    (if (> proposals-created u0)
+      (/ (* proposals-passed u100) proposals-created)
+      u0
+    )
+  )
+)
+
+(define-public (award-reputation (member principal) (points uint) (action (string-ascii 30)))
+  (let
+    (
+      (action-id (var-get next-action-id))
+      (current-rep (default-to
+        { total-score: u0, proposals-created: u0, proposals-passed: u0,
+          votes-cast: u0, participation-rate: u0, trust-level: "newcomer" }
+        (map-get? member-reputation member)
+      ))
+      (new-score (+ (get total-score current-rep) points))
+    )
+    (map-set member-reputation member
+      (merge current-rep
+        {
+          total-score: new-score,
+          trust-level: (calculate-trust-level new-score)
+        }
+      )
+    )
+    
+    (map-set reputation-history { member: member, action-id: action-id }
+      {
+        action-type: action,
+        score-change: (to-int points),
+        timestamp: stacks-block-height
+      }
+    )
+    
+    (var-set next-action-id (+ action-id u1))
+    (ok true)
+  )
+)
+
+(define-public (record-vote-cast (voter principal))
+  (let
+    (
+      (current-rep (default-to
+        { total-score: u0, proposals-created: u0, proposals-passed: u0,
+          votes-cast: u0, participation-rate: u0, trust-level: "newcomer" }
+        (map-get? member-reputation voter)
+      ))
+    )
+    (map-set member-reputation voter
+      (merge current-rep
+        {
+          votes-cast: (+ (get votes-cast current-rep) u1),
+          total-score: (+ (get total-score current-rep) u5)
+        }
+      )
+    )
+
+    (ok true)
+  )
+)
+
+(define-public (record-proposal-created (proposer principal))
+  (let
+    (
+      (current-rep (default-to
+        { total-score: u0, proposals-created: u0, proposals-passed: u0,
+          votes-cast: u0, participation-rate: u0, trust-level: "newcomer" }
+        (map-get? member-reputation proposer)
+      ))
+    )
+    (map-set member-reputation proposer
+      (merge current-rep
+        {
+          proposals-created: (+ (get proposals-created current-rep) u1),
+          total-score: (+ (get total-score current-rep) u10)
+        }
+      )
+    )
+
+    (ok true)
+  )
+)
+
+(define-public (record-proposal-passed (proposer principal))
+  (let
+    (
+      (current-rep (default-to
+        { total-score: u0, proposals-created: u0, proposals-passed: u0,
+          votes-cast: u0, participation-rate: u0, trust-level: "newcomer" }
+        (map-get? member-reputation proposer)
+      ))
+      (new-passed (+ (get proposals-passed current-rep) u1))
+      (new-rate (update-participation-rate proposer))
+    )
+    (map-set member-reputation proposer
+      (merge current-rep
+        {
+          proposals-passed: new-passed,
+          participation-rate: new-rate,
+          total-score: (+ (get total-score current-rep) u25)
+        }
+      )
+    )
+
+    (ok true)
+  )
+)
+
+(define-read-only (get-member-reputation (member principal))
+  (map-get? member-reputation member)
+)
+
+(define-read-only (get-reputation-history (member principal) (action-id uint))
+  (map-get? reputation-history { member: member, action-id: action-id })
+)
+
+(define-read-only (get-trust-level (member principal))
+  (match (map-get? member-reputation member)
+    rep-data (get trust-level rep-data)
+    "newcomer"
+  )
+)
+
+(define-read-only (get-reputation-score (member principal))
+  (match (map-get? member-reputation member)
+    rep-data (get total-score rep-data)
+    u0
+  )
 )
