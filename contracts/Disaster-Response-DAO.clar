@@ -11,6 +11,16 @@
 
 (define-constant ERR_INVALID_SCORE (err u201))
 
+(define-constant ERR_TIMELOCK_NOT_READY (err u300))
+(define-constant ERR_TIMELOCK_EXPIRED (err u301))
+(define-constant ERR_NOT_QUEUED (err u302))
+(define-constant ERR_ALREADY_QUEUED (err u303))
+
+(define-constant TIMELOCK_DELAY u144)
+(define-constant TIMELOCK_GRACE_PERIOD u1008)
+
+(define-data-var timelock-admin principal tx-sender)
+
 (define-data-var next-proposal-id uint u1)
 (define-data-var total-members uint u0)
 (define-data-var treasury-balance uint u0)
@@ -496,5 +506,96 @@
   (match (map-get? member-reputation member)
     rep-data (get total-score rep-data)
     u0
+  )
+)
+
+
+(define-map timelock-queue
+  uint
+  {
+    queued-at: uint,
+    execution-time: uint,
+    expired-at: uint,
+    executed: bool,
+    cancelled: bool
+  }
+)
+
+(define-public (queue-proposal (proposal-id uint))
+  (let
+    (
+      (proposal (unwrap! (map-get? proposals proposal-id) ERR_PROPOSAL_NOT_FOUND))
+      (current-block stacks-block-height)
+      (execution-time (+ current-block TIMELOCK_DELAY))
+      (expiry-time (+ execution-time TIMELOCK_GRACE_PERIOD))
+    )
+    (asserts! (get passed proposal) ERR_PROPOSAL_NOT_PASSED)
+    (asserts! (not (get executed proposal)) ERR_ALREADY_EXECUTED)
+    (asserts! (is-none (map-get? timelock-queue proposal-id)) ERR_ALREADY_QUEUED)
+    
+    (map-set timelock-queue proposal-id
+      {
+        queued-at: current-block,
+        execution-time: execution-time,
+        expired-at: expiry-time,
+        executed: false,
+        cancelled: false
+      }
+    )
+    
+    (ok execution-time)
+  )
+)
+
+(define-public (execute-queued-proposal (proposal-id uint))
+  (let
+    (
+      (proposal (unwrap! (map-get? proposals proposal-id) ERR_PROPOSAL_NOT_FOUND))
+      (timelock-data (unwrap! (map-get? timelock-queue proposal-id) ERR_NOT_QUEUED))
+      (current-block stacks-block-height)
+    )
+    (asserts! (not (get cancelled timelock-data)) ERR_NOT_QUEUED)
+    (asserts! (not (get executed timelock-data)) ERR_ALREADY_EXECUTED)
+    (asserts! (>= current-block (get execution-time timelock-data)) ERR_TIMELOCK_NOT_READY)
+    (asserts! (< current-block (get expired-at timelock-data)) ERR_TIMELOCK_EXPIRED)
+    
+    (try! (as-contract (stx-transfer? (get amount proposal) tx-sender (get recipient proposal))))
+    
+    (map-set proposals proposal-id (merge proposal { executed: true }))
+    (map-set timelock-queue proposal-id (merge timelock-data { executed: true }))
+    (var-set treasury-balance (- (var-get treasury-balance) (get amount proposal)))
+    
+    (ok true)
+  )
+)
+
+(define-public (cancel-queued-proposal (proposal-id uint))
+  (let
+    (
+      (timelock-data (unwrap! (map-get? timelock-queue proposal-id) ERR_NOT_QUEUED))
+    )
+    (asserts! (is-eq tx-sender (var-get timelock-admin)) ERR_NOT_AUTHORIZED)
+    (asserts! (not (get executed timelock-data)) ERR_ALREADY_EXECUTED)
+    (asserts! (not (get cancelled timelock-data)) ERR_NOT_QUEUED)
+    
+    (map-set timelock-queue proposal-id (merge timelock-data { cancelled: true }))
+    (ok true)
+  )
+)
+
+(define-read-only (get-timelock-data (proposal-id uint))
+  (map-get? timelock-queue proposal-id)
+)
+
+(define-read-only (is-execution-ready (proposal-id uint))
+  (match (map-get? timelock-queue proposal-id)
+    timelock-data
+    (and
+      (not (get cancelled timelock-data))
+      (not (get executed timelock-data))
+      (>= stacks-block-height (get execution-time timelock-data))
+      (< stacks-block-height (get expired-at timelock-data))
+    )
+    false
   )
 )
