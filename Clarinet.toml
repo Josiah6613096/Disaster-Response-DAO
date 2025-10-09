@@ -1,0 +1,31 @@
+[project]
+name = 'Disaster-Response-DAO'
+description = ''
+authors = []
+telemetry = true
+cache_dir = '.\.cache'
+requirements = []
+[contracts.Disaster-Response-DAO]
+path = 'contracts/Disaster-Response-DAO.clar'
+clarity_version = 3
+epoch = 3.1
+[contracts.resource-impact-tracker]
+path = 'contracts/resource-impact-tracker.clar'
+clarity_version = 3
+epoch = 3.1
+[contracts.milestone-disbursement]
+path = 'contracts/milestone-disbursement.clar'
+clarity_version = 3
+epoch = 3.1
+[repl.analysis]
+passes = ['check_checker']
+
+[repl.analysis.check_checker]
+strict = false
+trusted_sender = false
+trusted_caller = false
+callee_filter = false
+
+[repl.remote_data]
+enabled = false
+api_url = 'https://api.hiro.so'
